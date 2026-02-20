@@ -1,7 +1,8 @@
 import datetime
 import os
+import json
 
-import ollama
+from openai import OpenAI
 
 import display
 from config import Config
@@ -200,7 +201,10 @@ class Agent:
     def __init__(self, config: Config) -> None:
         self.config = config
         self.messages: list[dict] = []
-        self.client = ollama.Client(host=config.ollama_host)
+        self.client = OpenAI(
+            base_url=config.base_url,
+            api_key=config.api_key,
+        )
 
     def reset(self) -> None:
         self.messages = []
@@ -212,77 +216,63 @@ class Agent:
         while iteration < self.config.max_tool_iterations:
             iteration += 1
 
-            thinking_buffer: list[str] = []
             content_buffer: list[str] = []
             tool_calls_received = []
-            thinking_text = ""
 
             display.start_assistant_response()
 
             try:
-                stream = self.client.chat(
+                # OpenRouter / OpenAI chat completion
+                response = self.client.chat.completions.create(
                     model=self.config.model,
                     messages=self._build_api_messages(),
                     tools=TOOL_DEFINITIONS,
                     stream=True,
-                    options={"num_ctx": 32768, "temperature": 0.6},
                 )
             except Exception as e:
                 display.print_error(f"LLM call failed: {e}")
                 return
 
             # Collect streaming chunks
-            for chunk in stream:
-                msg = chunk.message
-
-                if hasattr(msg, "thinking") and msg.thinking:
-                    thinking_buffer.append(msg.thinking)
-
-                if msg.content:
-                    if thinking_buffer and not content_buffer:
-                        # First content token: flush thinking display
-                        display.flush_thinking(
-                            thinking_buffer, show=self.config.show_thinking
-                        )
-                        thinking_text = "".join(thinking_buffer)
-                        thinking_buffer.clear()
-                    content_buffer.append(msg.content)
-
-                if hasattr(msg, "tool_calls") and msg.tool_calls:
-                    if thinking_buffer:
-                        display.flush_thinking(
-                            thinking_buffer, show=self.config.show_thinking
-                        )
-                        thinking_text = "".join(thinking_buffer)
-                        thinking_buffer.clear()
-                    tool_calls_received = msg.tool_calls
-
-            # Flush any remaining thinking (no content followed)
-            if thinking_buffer:
-                display.flush_thinking(
-                    thinking_buffer, show=self.config.show_thinking
-                )
-                thinking_text = "".join(thinking_buffer)
-                thinking_buffer.clear()
+            current_assistant_message = {"role": "assistant", "content": "", "tool_calls": []}
+            
+            for chunk in response:
+                delta = chunk.choices[0].delta
+                
+                if delta.content:
+                    content_buffer.append(delta.content)
+                    # Note: Optional streaming display here if display.py supports it
+                
+                if delta.tool_calls:
+                    for tc_delta in delta.tool_calls:
+                        if len(current_assistant_message["tool_calls"]) <= tc_delta.index:
+                            current_assistant_message["tool_calls"].append({
+                                "id": tc_delta.id,
+                                "type": "function",
+                                "function": {"name": "", "arguments": ""}
+                            })
+                        
+                        tc = current_assistant_message["tool_calls"][tc_delta.index]
+                        if tc_delta.function.name:
+                            tc["function"]["name"] += tc_delta.function.name
+                        if tc_delta.function.arguments:
+                            tc["function"]["arguments"] += tc_delta.function.arguments
 
             content_text = "".join(content_buffer)
+            current_assistant_message["content"] = content_text
+            tool_calls_received = current_assistant_message["tool_calls"]
 
             if tool_calls_received:
-                # Store assistant message with serialized tool_calls
-                serialized = self._serialize_tool_calls(tool_calls_received)
-                msg_to_store: dict = {
-                    "role": "assistant",
-                    "content": content_text,
-                    "tool_calls": serialized,
-                }
-                if thinking_text:
-                    msg_to_store["thinking"] = thinking_text
-                self.messages.append(msg_to_store)
+                # Store assistant message with tool_calls
+                self.messages.append(current_assistant_message)
 
                 # Execute each tool and store result
                 for tc in tool_calls_received:
-                    fn_name = tc.function.name
-                    fn_args = dict(tc.function.arguments)
+                    fn_name = tc["function"]["name"]
+                    try:
+                        fn_args = json.loads(tc["function"]["arguments"])
+                    except json.JSONDecodeError:
+                        fn_args = {}
 
                     display.print_tool_call(fn_name, fn_args)
 
@@ -290,13 +280,19 @@ class Agent:
                     is_error = result.startswith("Error:")
                     display.print_tool_result(result, fn_name, is_error=is_error)
 
-                    self.messages.append({"role": "tool", "content": result})
+                    self.messages.append({
+                        "role": "tool",
+                        "tool_call_id": tc["id"],
+                        "name": fn_name,
+                        "content": result
+                    })
 
                 # Continue the loop: call LLM again
                 continue
 
             else:
                 # No tool calls: final response
+                self.messages.append(current_assistant_message)
                 display.render_markdown_response(content_text)
                 return
 
@@ -308,15 +304,3 @@ class Agent:
             "content": _build_system_prompt(self.config),
         }
         return [system_msg] + self.messages
-
-    def _serialize_tool_calls(self, tool_calls: list) -> list[dict]:
-        serialized = []
-        for i, tc in enumerate(tool_calls):
-            serialized.append({
-                "id": getattr(tc, "id", f"call_{i}"),
-                "function": {
-                    "name": tc.function.name,
-                    "arguments": dict(tc.function.arguments),
-                },
-            })
-        return serialized

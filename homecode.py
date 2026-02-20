@@ -2,6 +2,12 @@ import argparse
 import signal
 import sys
 
+import sys
+import os
+
+# Add src to path for simple imports
+sys.path.append(os.path.join(os.path.dirname(__file__), 'src'))
+
 import display
 from agent import Agent
 from config import load_config
@@ -41,7 +47,7 @@ def handle_slash_command(cmd: str, agent: Agent) -> bool:
         return True
 
     if lower == "/model":
-        display.print_info(f"Model: {agent.config.model}  |  Host: {agent.config.ollama_host}")
+        display.print_info(f"Model: {agent.config.model}  |  Host: {agent.config.base_url}")
         return True
 
     if lower == "/help":
@@ -97,7 +103,7 @@ def main() -> None:
     if args.workdir:
         config.working_dir = args.workdir
     if args.host:
-        config.ollama_host = args.host
+        config.base_url = args.host
     if args.thinking:
         config.show_thinking = True
 
@@ -107,7 +113,7 @@ def main() -> None:
             "Falling back to plain input (no history, no auto-suggest)."
         )
 
-    display.print_banner(config.model, config.ollama_host, config.working_dir)
+    display.print_banner(config.model, config.base_url, config.working_dir)
 
     agent = Agent(config)
 
