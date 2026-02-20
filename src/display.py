@@ -10,15 +10,16 @@ THEME = Theme({
     "tool.arg": "yellow",
     "tool.result": "dim green",
     "tool.error": "bold red",
-    "thinking": "dim italic blue",
     "info": "dim white",
 })
 
+# Main console for stdout; err_console writes to stderr
 console = Console(theme=THEME, highlight=False)
 err_console = Console(stderr=True, theme=THEME)
 
 
 def print_banner(model: str, host: str, workdir: str) -> None:
+    """Print the startup banner showing the active model, host, and working directory."""
     banner = Text()
     banner.append("HomeCode", style="bold cyan")
     banner.append("  model: ", style="dim")
@@ -37,10 +38,12 @@ def print_banner(model: str, host: str, workdir: str) -> None:
 
 
 def print_tool_call(tool_name: str, arguments: dict) -> None:
+    """Print a one-line summary of a tool call with its arguments."""
     text = Text()
     text.append(f"  {tool_name}", style="tool.name")
     for key, val in arguments.items():
         val_str = str(val)
+        # Truncate long values so the line stays readable
         if len(val_str) > 80:
             val_str = val_str[:77] + "..."
         text.append(f"  {key}=", style="dim")
@@ -49,6 +52,7 @@ def print_tool_call(tool_name: str, arguments: dict) -> None:
 
 
 def print_tool_result(result: str, tool_name: str, is_error: bool = False) -> None:
+    """Print the result of a tool call in a bordered panel, capped at 25 lines."""
     lines = result.splitlines()
     truncated = False
     if len(lines) > 25:
@@ -72,35 +76,28 @@ def print_tool_result(result: str, tool_name: str, is_error: bool = False) -> No
 
 
 def start_assistant_response() -> None:
+    """Print a horizontal rule to visually separate assistant turns."""
     console.print(Rule(style="dim"))
 
 
-def flush_thinking(buffer: list, show: bool = False) -> None:
-    if buffer and show:
-        thinking_text = "".join(buffer)
-        console.print(Panel(
-            Text(thinking_text, style="thinking"),
-            title="[dim]thinking[/dim]",
-            border_style="dim blue",
-            padding=(0, 1),
-        ))
-    buffer.clear()
-
-
 def render_markdown_response(content: str) -> None:
+    """Render the final assistant reply as formatted Markdown."""
     if content.strip():
         console.print(Markdown(content))
 
 
 def print_error(message: str) -> None:
+    """Print an error message to stderr."""
     err_console.print(f"[bold red]Error:[/bold red] {message}")
 
 
 def print_info(message: str) -> None:
+    """Print a dim informational message to stdout."""
     console.print(f"[info]{message}[/info]")
 
 
 def print_iteration_limit(limit: int) -> None:
+    """Warn the user that the tool iteration cap was reached."""
     console.print(Panel(
         f"[bold yellow]Tool iteration limit ({limit}) reached. "
         f"The agent stopped to avoid runaway loops.[/bold yellow]",

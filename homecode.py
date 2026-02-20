@@ -1,16 +1,14 @@
 import argparse
+import os
 import signal
 import sys
 
-import sys
-import os
-
-# Add src to path for simple imports
+# Add src/ to path so agent.py, tools.py, etc. can do plain imports
 sys.path.append(os.path.join(os.path.dirname(__file__), 'src'))
 
-import display
-from agent import Agent
-from config import load_config
+import src.display as display
+from src.agent import Agent
+from src.config import load_config
 
 try:
     from prompt_toolkit import prompt as pt_prompt
@@ -35,6 +33,7 @@ SLASH_HELP = {
 
 
 def handle_slash_command(cmd: str, agent: Agent) -> bool:
+    """Handle a slash command. Returns True if the command was recognized."""
     lower = cmd.lower().strip()
 
     if lower in ("/exit", "/quit"):
@@ -55,12 +54,14 @@ def handle_slash_command(cmd: str, agent: Agent) -> bool:
             display.console.print(f"  [bold cyan]{name}[/bold cyan]  [dim]{desc}[/dim]")
         return True
 
+    # Unknown slash command — let the agent handle it as normal text
     return False
 
 
 # ── Input ─────────────────────────────────────────────────────────────────────
 
 def _make_key_bindings() -> "KeyBindings":
+    """Allow Esc+Enter to insert a newline without submitting."""
     kb = KeyBindings()
 
     @kb.add("escape", "enter")
@@ -71,6 +72,7 @@ def _make_key_bindings() -> "KeyBindings":
 
 
 def get_user_input(history_file: str) -> str:
+    """Read one line of user input, with history and auto-suggest if available."""
     if HAS_PROMPT_TOOLKIT:
         return pt_prompt(
             "\n> ",
@@ -90,11 +92,9 @@ def main() -> None:
         description="HomeCode - Local AI coding assistant",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("--model",    help="Ollama model name")
-    parser.add_argument("--workdir",  help="Working directory for file/bash operations")
-    parser.add_argument("--host",     help="Ollama API host URL")
-    parser.add_argument("--thinking", action="store_true",
-                        help="Show model chain-of-thought reasoning")
+    parser.add_argument("--model",   help="Model name")
+    parser.add_argument("--workdir", help="Working directory for file/bash operations")
+    parser.add_argument("--host",    help="API host URL")
     args = parser.parse_args()
 
     config = load_config()
@@ -104,8 +104,6 @@ def main() -> None:
         config.working_dir = args.workdir
     if args.host:
         config.base_url = args.host
-    if args.thinking:
-        config.show_thinking = True
 
     if not HAS_PROMPT_TOOLKIT:
         display.print_info(

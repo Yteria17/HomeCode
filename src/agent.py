@@ -200,19 +200,23 @@ OS: {os.uname().sysname} {os.uname().machine}
 class Agent:
     def __init__(self, config: Config) -> None:
         self.config = config
-        self.messages: list[dict] = []
+        self.messages: list[dict] = []  # Full conversation history
         self.client = OpenAI(
             base_url=config.base_url,
             api_key=config.api_key,
         )
 
     def reset(self) -> None:
+        """Clear conversation history."""
         self.messages = []
 
     def run(self, user_input: str) -> None:
+        """Send user input to the LLM and execute any tool calls it returns.
+        Loops until the model produces a plain text reply or the iteration cap is hit."""
         self.messages.append({"role": "user", "content": user_input})
         iteration = 0
 
+        # Agentic loop: keep calling the LLM until it stops requesting tools
         while iteration < self.config.max_tool_iterations:
             iteration += 1
 
@@ -222,7 +226,7 @@ class Agent:
             display.start_assistant_response()
 
             try:
-                # OpenRouter / OpenAI chat completion
+                # OpenRouter / OpenAI chat completion (streaming)
                 response = self.client.chat.completions.create(
                     model=self.config.model,
                     messages=self._build_api_messages(),
@@ -233,17 +237,17 @@ class Agent:
                 display.print_error(f"LLM call failed: {e}")
                 return
 
-            # Collect streaming chunks
+            # Accumulate streaming chunks into a single message
             current_assistant_message = {"role": "assistant", "content": "", "tool_calls": []}
-            
+
             for chunk in response:
                 delta = chunk.choices[0].delta
-                
+
                 if delta.content:
                     content_buffer.append(delta.content)
-                    # Note: Optional streaming display here if display.py supports it
-                
+
                 if delta.tool_calls:
+                    # Build tool call objects incrementally from deltas
                     for tc_delta in delta.tool_calls:
                         if len(current_assistant_message["tool_calls"]) <= tc_delta.index:
                             current_assistant_message["tool_calls"].append({
@@ -251,7 +255,7 @@ class Agent:
                                 "type": "function",
                                 "function": {"name": "", "arguments": ""}
                             })
-                        
+
                         tc = current_assistant_message["tool_calls"][tc_delta.index]
                         if tc_delta.function.name:
                             tc["function"]["name"] += tc_delta.function.name
@@ -263,10 +267,10 @@ class Agent:
             tool_calls_received = current_assistant_message["tool_calls"]
 
             if tool_calls_received:
-                # Store assistant message with tool_calls
+                # Save the assistant message that contains the tool call requests
                 self.messages.append(current_assistant_message)
 
-                # Execute each tool and store result
+                # Run each requested tool and append the result to the history
                 for tc in tool_calls_received:
                     fn_name = tc["function"]["name"]
                     try:
@@ -280,6 +284,7 @@ class Agent:
                     is_error = result.startswith("Error:")
                     display.print_tool_result(result, fn_name, is_error=is_error)
 
+                    # Tool results must be linked to the tool call by ID
                     self.messages.append({
                         "role": "tool",
                         "tool_call_id": tc["id"],
@@ -287,11 +292,11 @@ class Agent:
                         "content": result
                     })
 
-                # Continue the loop: call LLM again
+                # Feed results back to the LLM in the next iteration
                 continue
 
             else:
-                # No tool calls: final response
+                # No tool calls: the model is done, render its text reply
                 self.messages.append(current_assistant_message)
                 display.render_markdown_response(content_text)
                 return
@@ -299,6 +304,7 @@ class Agent:
         display.print_iteration_limit(self.config.max_tool_iterations)
 
     def _build_api_messages(self) -> list[dict]:
+        """Prepend the system prompt to the conversation history for each API call."""
         system_msg = {
             "role": "system",
             "content": _build_system_prompt(self.config),
